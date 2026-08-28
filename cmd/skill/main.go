@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/PrometheRus/alice/internal/logger"
+	"github.com/nikitaw13/alice/internal/logger"
 	"go.uber.org/zap"
 )
 
@@ -62,7 +62,10 @@ func run() error {
 		return err
 	}
 
+	// создаём экземпляр приложения, пока без внешней зависимости хранилища сообщений
+	appInstance := newApp(nil)
+
 	logger.Log.Info("Running server", zap.String("address", flagRunAddr))
-	// оборачиваем хендлер webhook в middleware с логированием
-	return http.ListenAndServe(flagRunAddr, logger.RequestLogger(gzipMiddleware(webhook)))
+	// оборачиваем хендлер webhook в middleware с логированием и поддержкой gzip
+	return http.ListenAndServe(flagRunAddr, logger.RequestLogger(gzipMiddleware(appInstance.webhook)))
 }

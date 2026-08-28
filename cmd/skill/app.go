@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/PrometheRus/alice/internal/logger"
-	"github.com/PrometheRus/alice/internal/models"
-	"github.com/PrometheRus/alice/internal/store"
+	"github.com/nikitaw13/alice/internal/logger"
+	"github.com/nikitaw13/alice/internal/models"
+	"github.com/nikitaw13/alice/internal/store"
 	"go.uber.org/zap"
 )
 
@@ -23,6 +23,8 @@ func newApp(s store.MessageStore) *app {
 }
 
 func (a *app) webhook(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
 	if r.Method != http.MethodPost {
 		logger.Log.Debug("got request with bad method", zap.String("method", r.Method))
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -39,14 +41,26 @@ func (a *app) webhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// проверяем, что пришёл запрос понятного типа
+	// проверим, что пришёл запрос понятного типа
 	if req.Request.Type != models.TypeSimpleUtterance {
 		logger.Log.Debug("unsupported request type", zap.String("type", req.Request.Type))
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		return
 	}
 
+	// получаем список сообщений для текущего пользователя
+	messages, err := a.store.ListMessages(ctx, req.Session.User.UserID)
+	if err != nil {
+		logger.Log.Debug("cannot load messages for user", zap.Error(err))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// формируем текст с количеством сообщений
 	text := "Для вас нет новых сообщений."
+	if len(messages) > 0 {
+		text = fmt.Sprintf("Для вас %d новых сообщений.", len(messages))
+	}
 
 	// первый запрос новой сессии
 	if req.Session.New {
@@ -62,7 +76,7 @@ func (a *app) webhook(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().In(tz)
 		hour, minute, _ := now.Clock()
 
-		// формируем текст ответа
+		// формируем новый текст приветствия
 		text = fmt.Sprintf("Точное время %d часов, %d минут. %s", hour, minute, text)
 	}
 
