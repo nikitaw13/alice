@@ -7,28 +7,46 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/nikitaw13/alice/internal/store"
+	"github.com/nikitaw13/alice/internal/store/mock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 func TestWebhook(t *testing.T) {
-	handler := http.HandlerFunc(webhook)
+	// создадим конроллер моков и экземпляр мок-хранилища
+	ctrl := gomock.NewController(t)
+	s := mock.NewMockMessageStore(ctrl)
+
+	// определим, какой результат будем получать от «хранилища»
+	messages := []store.Message{
+		{
+			Sender:  "411419e5-f5be-4cdb-83aa-2ca2b6648353",
+			Time:    time.Now(),
+			Payload: "Hello!",
+		},
+	}
+
+	// установим условие: при любом вызове метода ListMessages возвращать массив messages без ошибки
+	s.EXPECT().
+		ListMessages(gomock.Any(), gomock.Any()).
+		Return(messages, nil)
+
+	// создадим экземпляр приложения и передадим ему «хранилище»
+	appInstance := newApp(s)
+
+	handler := http.HandlerFunc(appInstance.webhook)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	successBody := `{
-        "response": {
-            "text": "Извините, я пока ничего не умею"
-        },
-        "version": "1.0"
-    }`
-
 	testCases := []struct {
-		name         string // добавляем название тестов
+		name         string // добавим название тестов
 		method       string
-		body         string // добавляем тело запроса в табличные тесты
+		body         string // добавим тело запроса в табличные тесты
 		expectedCode int
 		expectedBody string
 	}{
@@ -66,9 +84,9 @@ func TestWebhook(t *testing.T) {
 		{
 			name:         "method_post_success",
 			method:       http.MethodPost,
-			body:         `{"request": {"type": "SimpleUtterance", "command": "sudo do something"}, "version": "1.0"}`,
+			body:         `{"request": {"type": "SimpleUtterance", "command": "sudo do something"}, "session": {"new": true}, "version": "1.0"}`,
 			expectedCode: http.StatusOK,
-			expectedBody: successBody,
+			expectedBody: `Точное время .* часов, .* минут. Для вас 1 новых сообщений.`,
 		},
 	}
 
@@ -87,16 +105,34 @@ func TestWebhook(t *testing.T) {
 			assert.NoError(t, err, "error making HTTP request")
 
 			assert.Equal(t, tc.expectedCode, resp.StatusCode(), "Response code didn't match expected")
-			// проверяем корректность полученного тела ответа, если мы его ожидаем
 			if tc.expectedBody != "" {
-				assert.JSONEq(t, tc.expectedBody, string(resp.Body()))
+				assert.Regexp(t, tc.expectedBody, string(resp.Body()))
 			}
 		})
 	}
 }
 
 func TestGzipCompression(t *testing.T) {
-	handler := http.HandlerFunc(gzipMiddleware(webhook))
+	ctrl := gomock.NewController(t)
+	s := mock.NewMockMessageStore(ctrl)
+
+	messages := []store.Message{
+		{
+			Sender:  "411419e5-f5be-4cdb-83aa-2ca2b6648353",
+			Time:    time.Now(),
+			Payload: "Hello!",
+		},
+	}
+
+	s.EXPECT().
+		ListMessages(gomock.Any(), gomock.Any()).
+		Return(messages, nil).
+		// удостоверимся, что мок вызывается точно 2 раза
+		Times(2)
+
+	appInstance := newApp(s)
+
+	handler := http.HandlerFunc(gzipMiddleware(appInstance.webhook))
 
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
@@ -112,7 +148,7 @@ func TestGzipCompression(t *testing.T) {
 	// ожидаемое содержимое тела ответа при успешном запросе
 	successBody := `{
         "response": {
-            "text": "Извините, я пока ничего не умею"
+            "text": "Для вас 1 новых сообщений."
         },
         "version": "1.0"
     }`
